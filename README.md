@@ -319,9 +319,10 @@ Native Linux is a primary, first-class supported platform. You do not need Docke
 
 #### 1. Install System Dependencies
 
-- **Ubuntu / Debian**:
+- **Ubuntu / Debian (from scratch)**:
   ```bash
-  sudo apt update && sudo apt install -y \
+  sudo apt update && sudo apt upgrade -y
+  sudo apt install -y \
     build-essential cmake ninja-build pkg-config git \
     qt6-base-dev qt6-tools-dev qt6-l10n-tools \
     libcurl4-gnutls-dev libjsoncpp-dev libsqlite3-dev \
@@ -350,15 +351,15 @@ Native Linux is a primary, first-class supported platform. You do not need Docke
 #### 2. Clone the Repository
 
 ```bash
-# Clone the repository (active fork):
-git clone https://github.com/Stella-Runcandel/ai-file-sorter.git
+# Clone the repository:
+git clone https://github.com/Preet-Gandhi/ai-file-sorter.git
 # Or clone upstream:
 # git clone https://github.com/hyperfield/ai-file-sorter.git
 
 cd ai-file-sorter
 git submodule update --init --recursive
 ```
-*(Submodules include Catch2 under `external/Catch2` for unit testing. Legacy embedded AI submodules such as llama.cpp have been completely removed).*
+*(Submodules include Catch2 under `external/Catch2` for unit testing).*
 
 #### 3. Configure and Build
 
@@ -366,17 +367,23 @@ git submodule update --init --recursive
 # Configure with CMake (release mode):
 cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_FILE_SORTER_BUILD_TESTS=ON
 
-# Compile the application:
+# Compile the application (parallel build):
 cmake --build build --parallel
 ```
 
 #### 4. Run Application & Tests
 
 ```bash
-# Launch the GUI:
+# Launch the GUI (Ubuntu Desktop or WSL2 with WSLg):
 ./build/aifilesorter
 
-# Run unit tests:
+# Run on headless servers / remote SSH without a monitor:
+# sudo apt install -y xvfb
+# xvfb-run ./build/aifilesorter
+# Or use the headless CLI command:
+# ./build/aifilesorter --help
+
+# Run unit tests (374 test cases):
 ctest --test-dir build --output-on-failure
 ```
 
@@ -418,8 +425,8 @@ Native Windows compilation uses MSVC and project-local vcpkg dependencies in man
 
 1. **Clone repository and submodules**:
    ```powershell
-   # Clone the repository (active fork):
-   git clone https://github.com/Stella-Runcandel/ai-file-sorter.git
+   # Clone the repository:
+   git clone https://github.com/Preet-Gandhi/ai-file-sorter.git
    # Or clone upstream:
    # git clone https://github.com/hyperfield/ai-file-sorter.git
 
