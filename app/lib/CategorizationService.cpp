@@ -645,7 +645,8 @@ std::vector<CategorizedFile> CategorizationService::categorize_entries(
     std::function<std::unique_ptr<ILLMClient>()> llm_factory,
     const PromptOverrideProvider& prompt_override,
     const SuggestedNameProvider& suggested_name_provider,
-    const ResultCallback& result_callback) const
+    const ResultCallback& result_callback,
+    std::atomic<bool>* pause_flag) const
 {
     std::vector<CategorizedFile> categorized;
     if (files.empty()) {
@@ -655,7 +656,7 @@ std::vector<CategorizedFile> CategorizationService::categorize_entries(
         return categorized;
     }
 
-    auto llm = llm_factory ? llm_factory() : nullptr;
+    std::shared_ptr<ILLMClient> llm = llm_factory ? std::shared_ptr<ILLMClient>(llm_factory()) : nullptr;
     if (!llm) {
         throw std::runtime_error("Failed to create LLM client.");
     }
@@ -699,6 +700,17 @@ std::vector<CategorizedFile> CategorizationService::categorize_entries(
             break;
         }
 
+        while (pause_flag && pause_flag->load()) {
+            if (stop_flag.load()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        if (stop_flag.load()) {
+            break;
+        }
+
         if (queue_callback) {
             queue_callback(entry);
         }
@@ -707,24 +719,35 @@ std::vector<CategorizedFile> CategorizationService::categorize_entries(
             ? suggested_name_provider(entry)
             : std::string();
         const auto override_value = prompt_override ? prompt_override(entry) : std::nullopt;
-        if (auto categorized_entry = categorize_single_entry(*llm,
-                                                             is_local_llm,
-                                                             entry,
-                                                             override_value,
-                                                             suggested_name,
-                                                             stop_flag,
-                                                             progress_callback,
-                                                              recategorization_callback,
-                                                              session_history,
-                                                              remote_throttle_callback)) {
-            categorized.push_back(*categorized_entry);
-            if (result_callback) {
-                result_callback(*categorized_entry);
+        try {
+            if (auto categorized_entry = categorize_single_entry(*llm,
+                                                                 is_local_llm,
+                                                                 entry,
+                                                                 override_value,
+                                                                 suggested_name,
+                                                                 stop_flag,
+                                                                 progress_callback,
+                                                                 recategorization_callback,
+                                                                 session_history,
+                                                                 remote_throttle_callback)) {
+                categorized.push_back(*categorized_entry);
+                if (result_callback) {
+                    result_callback(*categorized_entry);
+                }
             }
-        }
 
-        if (completion_callback) {
-            completion_callback(entry);
+            if (completion_callback) {
+                completion_callback(entry);
+            }
+        } catch (const AnalysisCancelled&) {
+            break;
+        } catch (const std::exception& ex) {
+            if (progress_callback) {
+                progress_callback(fmt::format("[ERROR] Failed to categorize {}: {}", entry.file_name, ex.what()));
+            }
+            if (core_logger) {
+                core_logger->warn("Failed to categorize '{}': {}", entry.file_name, ex.what());
+            }
         }
     }
 
@@ -1210,11 +1233,12 @@ DatabaseManager::ResolvedCategory CategorizationService::categorize_via_llm(
     const std::string& prompt_path,
     FileType file_type,
     const ProgressCallback& progress_callback,
-    const std::string& consistency_context) const
+    const std::string& consistency_context,
+    const std::atomic<bool>* stop_flag) const
 {
     try {
         const std::string category_subcategory =
-            run_llm_with_timeout(llm, prompt_name, prompt_path, file_type, is_local_llm, consistency_context);
+            run_llm_with_timeout(llm, prompt_name, prompt_path, file_type, is_local_llm, consistency_context, stop_flag);
         auto [category, subcategory] =
             CategorizationResponseParser::split_category_subcategory(category_subcategory);
 
@@ -1319,6 +1343,8 @@ DatabaseManager::ResolvedCategory CategorizationService::categorize_via_llm(
         const auto display_resolved = localize_resolved_category(llm, resolved);
         emit_progress_message(progress_callback, "AI", display_name, display_resolved, display_path, prompt_path);
         return resolved;
+    } catch (const AnalysisCancelled&) {
+        throw;
     } catch (const std::exception& ex) {
         const std::string err_msg = fmt::format("[LLM-ERROR] {} ({})", display_name, ex.what());
         if (progress_callback) {
@@ -1366,7 +1392,8 @@ DatabaseManager::ResolvedCategory CategorizationService::categorize_with_cache(
     FileType file_type,
     const ProgressCallback& progress_callback,
     const std::string& consistency_context,
-    const RemoteThrottleCallback& remote_throttle_callback) const
+    const RemoteThrottleCallback& remote_throttle_callback,
+    const std::atomic<bool>* stop_flag) const
 {
     if (auto cached = try_cached_categorization(display_name,
                                                 display_path,
@@ -1395,7 +1422,8 @@ DatabaseManager::ResolvedCategory CategorizationService::categorize_with_cache(
                               prompt_path,
                               file_type,
                               progress_callback,
-                              consistency_context);
+                              consistency_context,
+                              stop_flag);
 }
 
 std::optional<CategorizedFile> CategorizationService::categorize_single_entry(
@@ -1443,7 +1471,8 @@ std::optional<CategorizedFile> CategorizationService::categorize_single_entry(
                                                       prompt_path_display,
                                                       progress_callback,
                                                       combined_context,
-                                                      remote_throttle_callback);
+                                                      remote_throttle_callback,
+                                                      &stop_flag);
             break;
         } catch (const BackoffError& backoff) {
             const int wait_seconds = backoff.retry_after_seconds() > 0 ? backoff.retry_after_seconds() : 60;
@@ -1803,7 +1832,8 @@ DatabaseManager::ResolvedCategory CategorizationService::run_categorization_with
     const std::string& prompt_path,
     const ProgressCallback& progress_callback,
     const std::string& combined_context,
-    const RemoteThrottleCallback& remote_throttle_callback) const
+    const RemoteThrottleCallback& remote_throttle_callback,
+    const std::atomic<bool>* stop_flag) const
 {
     return categorize_with_cache(llm,
                                  is_local_llm,
@@ -1815,7 +1845,8 @@ DatabaseManager::ResolvedCategory CategorizationService::run_categorization_with
                                  entry.type,
                                  progress_callback,
                                  combined_context,
-                                 remote_throttle_callback);
+                                 remote_throttle_callback,
+                                 stop_flag);
 }
 
 std::optional<CategorizedFile> CategorizationService::handle_empty_result(
@@ -1888,14 +1919,35 @@ std::string CategorizationService::run_llm_with_timeout(
     const std::string& item_path,
     FileType file_type,
     bool is_local_llm,
-    const std::string& consistency_context) const
+    const std::string& consistency_context,
+    const std::atomic<bool>* stop_flag) const
+{
+    std::shared_ptr<ILLMClient> shared_llm(&llm, [](ILLMClient*) {});
+    return run_llm_with_timeout(std::move(shared_llm), item_name, item_path, file_type, is_local_llm, consistency_context, stop_flag);
+}
+
+std::string CategorizationService::run_llm_with_timeout(
+    std::shared_ptr<ILLMClient> llm,
+    const std::string& item_name,
+    const std::string& item_path,
+    FileType file_type,
+    bool is_local_llm,
+    const std::string& consistency_context,
+    const std::atomic<bool>* stop_flag) const
 {
     const int timeout_seconds = resolve_llm_timeout(is_local_llm);
 
-    auto future = start_llm_future(llm, item_name, item_path, file_type, consistency_context);
+    auto future = start_llm_future(std::move(llm), item_name, item_path, file_type, consistency_context);
 
-    if (future.wait_for(std::chrono::seconds(timeout_seconds)) == std::future_status::timeout) {
-        throw std::runtime_error("Timed out waiting for LLM response");
+    const auto start_time = std::chrono::steady_clock::now();
+    const auto timeout_duration = std::chrono::seconds(timeout_seconds);
+    while (future.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
+        if (stop_flag && stop_flag->load()) {
+            throw AnalysisCancelled("Analysis stopped by user.");
+        }
+        if (std::chrono::steady_clock::now() - start_time >= timeout_duration) {
+            throw std::runtime_error("Timed out waiting for LLM response");
+        }
     }
 
     return future.get();
@@ -1957,7 +2009,7 @@ int CategorizationService::resolve_remote_requests_per_minute() const
 }
 
 std::future<std::string> CategorizationService::start_llm_future(
-    ILLMClient& llm,
+    std::shared_ptr<ILLMClient> llm,
     const std::string& item_name,
     const std::string& item_path,
     FileType file_type,
@@ -1966,9 +2018,17 @@ std::future<std::string> CategorizationService::start_llm_future(
     auto promise = std::make_shared<std::promise<std::string>>();
     std::future<std::string> future = promise->get_future();
 
-    std::thread([&llm, promise, item_name, item_path, file_type, consistency_context]() mutable {
+    std::thread([llm = std::move(llm), promise, item_name, item_path, file_type, consistency_context]() mutable {
+        if (!llm) {
+            try {
+                promise->set_exception(std::make_exception_ptr(std::runtime_error("Null LLM client")));
+            } catch (...) {
+                // no-op
+            }
+            return;
+        }
         try {
-            promise->set_value(llm.categorize_file(item_name, item_path, file_type, consistency_context));
+            promise->set_value(llm->categorize_file(item_name, item_path, file_type, consistency_context));
         } catch (...) {
             try {
                 promise->set_exception(std::current_exception());

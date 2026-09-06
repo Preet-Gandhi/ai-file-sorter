@@ -9,6 +9,9 @@
 #endif
 
 #include <sstream>
+#include <filesystem>
+#include <curl/curl.h>
+#include "Utils.hpp"
 
 TEST_CASE("OpenAICompatibleProvider - Request Serialization", "[tier1][provider]") {
     SECTION("Text-only single message serialization") {
@@ -221,4 +224,20 @@ TEST_CASE("OpenAICompatibleProvider - Mock HTTP Transport Execution", "[tier2][p
         REQUIRE(res.model == "qwen2.5:7b");
         REQUIRE(res.latency_ms == 85);
     }
+}
+
+TEST_CASE("OpenAICompatibleProvider - Windows SSL CA Bundle Configuration", "[tier1][provider]") {
+#ifdef _WIN32
+    SECTION("CA bundle is configured for libcurl easy handle on Windows") {
+        CURL* curl = curl_easy_init();
+        REQUIRE(curl != nullptr);
+
+        REQUIRE(OpenAICompatibleProvider::configure_curl_ssl(curl));
+
+        const auto cert_path = Utils::ensure_ca_bundle();
+        REQUIRE(std::filesystem::exists(cert_path));
+
+        curl_easy_cleanup(curl);
+    }
+#endif
 }

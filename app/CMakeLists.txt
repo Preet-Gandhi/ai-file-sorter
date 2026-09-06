@@ -669,7 +669,35 @@ list(REMOVE_ITEM APP_LIB_SOURCES ${AIFS_TEST_ONLY_APP_SOURCES})
 file(GLOB APP_HEADER_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
 )
-set(APP_SOURCES ${APP_MAIN_SOURCE} ${APP_LIB_SOURCES})
+# Core library target
+add_library(aifs_core STATIC
+    ${APP_LIB_SOURCES}
+    ${APP_HEADER_SOURCES}
+)
+aifs_apply_update_mode(aifs_core)
+target_include_directories(aifs_core PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    ${DOC_DEPS_INCLUDE_DIRS}
+)
+target_link_libraries(aifs_core PUBLIC
+    Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Network
+    CURL::libcurl
+    OpenSSL::SSL OpenSSL::Crypto
+    ${AIFS_SQLITE_TARGET}
+    JsonCpp::JsonCpp
+    fmt::fmt
+    spdlog::spdlog
+    Intl::Intl
+    ${MEDIAINFO_DEPS_LIBS}
+    ${DOC_DEPS_LIBS}
+)
+target_compile_definitions(aifs_core PUBLIC
+    AIFS_STORAGE_PLUGIN_CATALOG_URL="${AI_FILE_SORTER_STORAGE_PLUGIN_CATALOG_URL}"
+)
+if(WIN32)
+    target_compile_definitions(aifs_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
+
 set(AIFS_TRANSLATION_TS_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/i18n/aifilesorter_fr.ts"
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/i18n/aifilesorter_de.ts"
@@ -691,12 +719,12 @@ set(AIFS_TRANSLATION_QM_FILES)
 
 # Executable (GUI subsystem on Windows)
 if(WIN32)
-    add_executable(aifilesorter WIN32 ${APP_SOURCES})
+    add_executable(aifilesorter WIN32 ${APP_MAIN_SOURCE})
     set_target_properties(aifilesorter PROPERTIES
         OUTPUT_NAME "${_aifs_windows_main_output_name}"
     )
 else()
-    add_executable(aifilesorter ${APP_SOURCES})
+    add_executable(aifilesorter ${APP_MAIN_SOURCE})
 endif()
 
 aifs_apply_update_mode(aifilesorter)
@@ -871,20 +899,7 @@ qt_add_resources(aifilesorter "app_resources"
 
 # Link libraries
 target_link_libraries(aifilesorter PRIVATE
-    Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Network
-    CURL::libcurl
-    OpenSSL::SSL OpenSSL::Crypto
-    ${AIFS_SQLITE_TARGET}
-    JsonCpp::JsonCpp
-    fmt::fmt
-    spdlog::spdlog
-    Intl::Intl
-    ${MEDIAINFO_DEPS_LIBS}
-    ${DOC_DEPS_LIBS}
-)
-
-target_compile_definitions(aifilesorter PRIVATE
-    AIFS_STORAGE_PLUGIN_CATALOG_URL="${AI_FILE_SORTER_STORAGE_PLUGIN_CATALOG_URL}"
+    aifs_core
 )
 
 
@@ -1009,6 +1024,7 @@ if(WIN32)
             message(FATAL_ERROR "Required system library '${libName}' not found. Ensure the Windows SDK is installed.")
         endif()
         target_link_libraries(aifilesorter PRIVATE "${${varName}}")
+        target_link_libraries(aifs_core PUBLIC "${${varName}}")
     endforeach()
 endif()
 
@@ -1207,6 +1223,10 @@ if(AI_FILE_SORTER_BUILD_TESTS)
         AIFS_ONEDRIVE_STORAGE_PLUGIN_NAME="$<TARGET_FILE_NAME:aifs_onedrive_storage_plugin>"
     )
     add_dependencies(aifilesorter aifs_onedrive_storage_plugin)
+    target_compile_definitions(aifs_core PRIVATE
+        AIFS_ONEDRIVE_STORAGE_PLUGIN_NAME="$<TARGET_FILE_NAME:aifs_onedrive_storage_plugin>"
+    )
+    add_dependencies(aifs_core aifs_onedrive_storage_plugin)
 
     set(AIFS_COMMON_TEST_SOURCES
         ${APP_LIB_SOURCES}

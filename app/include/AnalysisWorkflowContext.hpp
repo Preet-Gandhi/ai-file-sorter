@@ -69,4 +69,5 @@ struct AnalysisWorkflowContext {
     std::function<bool(const std::string&)> prompt_visual_cpu_fallback;
     std::function<bool(const std::string&)> prompt_continue_without_visual_analysis;
     std::function<void(const CategorizedFile&, const std::string&)> notify_recategorization_reset;
+    std::atomic<bool>* pause_analysis{nullptr};
 };

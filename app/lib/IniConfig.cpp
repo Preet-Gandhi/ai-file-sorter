@@ -4,6 +4,13 @@
 #include <iostream>
 #include <optional>
 #include <utility>
+#include <filesystem>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
 
@@ -59,7 +66,8 @@ std::optional<std::pair<std::string, std::string>> parse_key_value(const std::st
 
 
 bool IniConfig::load(const std::string &filename) {
-    std::ifstream file(filename);
+    const std::filesystem::path path = std::filesystem::u8path(filename);
+    std::ifstream file(path);
     if (!file.is_open()) {
         ini_log(spdlog::level::err, "Failed to open config file: {}", filename);
         return false;
@@ -102,19 +110,53 @@ void IniConfig::setValue(const std::string &section, const std::string &key, con
 
 bool IniConfig::save(const std::string &filename) const
 {
-    std::ofstream file(filename);
-    
-    if (!file.is_open()) {
-        ini_log(spdlog::level::err, "Failed to open config file: {}", filename);
+    const std::filesystem::path target_path = std::filesystem::u8path(filename);
+    std::error_code ec;
+    std::filesystem::create_directories(target_path.parent_path(), ec);
+    if (ec) {
+        ini_log(spdlog::level::err, "Failed to create directory for config file '{}': {}", filename, ec.message());
         return false;
     }
 
-    for (const auto &section : data) {
-        file << "[" << section.first << "]\n";
-        for (const auto &pair : section.second) {
-            file << pair.first << " = " << pair.second << "\n";
+    const std::filesystem::path tmp_path = target_path.string() + ".tmp";
+    {
+        std::ofstream file(tmp_path);
+        if (!file.is_open()) {
+            ini_log(spdlog::level::err, "Failed to open temporary config file: {}", tmp_path.string());
+            return false;
         }
-        file << "\n";
+
+        for (const auto &section : data) {
+            file << "[" << section.first << "]\n";
+            for (const auto &pair : section.second) {
+                file << pair.first << " = " << pair.second << "\n";
+            }
+            file << "\n";
+        }
+
+        file.flush();
+        if (!file.good()) {
+            ini_log(spdlog::level::err, "Failed to write config data to '{}'", tmp_path.string());
+            file.close();
+            std::filesystem::remove(tmp_path, ec);
+            return false;
+        }
+    }
+
+    std::filesystem::rename(tmp_path, target_path, ec);
+    if (ec) {
+#ifdef _WIN32
+        if (MoveFileExW(tmp_path.wstring().c_str(),
+                        target_path.wstring().c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) {
+            ec.clear();
+        } else
+#endif
+        {
+            ini_log(spdlog::level::err, "Failed to atomically rename config file to '{}': {}", filename, ec.message());
+            std::filesystem::remove(tmp_path, ec);
+            return false;
+        }
     }
 
     return true;

@@ -12,6 +12,7 @@
 #include "DocumentTextAnalyzer.hpp"
 #include "FilenameLocalizationService.hpp"
 #include "ILLMClient.hpp"
+#include "LLMErrors.hpp"
 #include "ImageRenameMetadataService.hpp"
 #include "ImageAnalyzer.hpp"
 #include "MediaRenameMetadataService.hpp"
@@ -48,12 +49,6 @@ constexpr int kMinimumPromptBudgetTokens = 256;
 constexpr int kDefaultDocumentOutputTokens = 256;
 constexpr int kLocalDocumentCharsPerToken = 2;
 constexpr int kRemoteDocumentCharsPerToken = 4;
-
-class AnalysisCancelled : public std::runtime_error {
-public:
-    explicit AnalysisCancelled(const std::string& message)
-        : std::runtime_error(message) {}
-};
 
 std::string to_utf8(const QString& value)
 {
@@ -244,6 +239,15 @@ AnalysisRunResult AnalysisCoordinator::execute()
             stop_requested = true;
         }
         return stop_requested;
+    };
+
+    auto wait_if_paused = [&]() {
+        while (app_.pause_analysis && app_.pause_analysis->load()) {
+            if (update_stop()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
     };
 
     app_.append_progress(to_utf8(app_.tr("[SCAN] Exploring %1")
@@ -1134,6 +1138,10 @@ AnalysisRunResult AnalysisCoordinator::execute()
                     if (update_stop()) {
                         break;
                     }
+                    wait_if_paused();
+                    if (update_stop()) {
+                        break;
+                    }
                     const bool already_renamed = renamed_files.contains(entry_key(entry));
                     if (already_renamed && rename_images_only) {
                         continue;
@@ -1405,6 +1413,10 @@ AnalysisRunResult AnalysisCoordinator::execute()
             llm->set_prompt_logging_enabled(app_.should_log_prompts());
 
             for (const auto& entry : document_entries) {
+                if (update_stop()) {
+                    break;
+                }
+                wait_if_paused();
                 if (update_stop()) {
                     break;
                 }
@@ -1724,7 +1736,8 @@ AnalysisRunResult AnalysisCoordinator::execute()
                 suggested_name_provider,
                 [&publish_review_preview_entry](const CategorizedFile& entry) {
                     publish_review_preview_entry(entry);
-                });
+                },
+                app_.pause_analysis);
         }
         apply_image_dates(other_results);
         apply_document_dates(other_results);
@@ -1792,7 +1805,8 @@ AnalysisRunResult AnalysisCoordinator::execute()
                     suggested_name_provider,
                     [&publish_review_preview_entry](const CategorizedFile& entry) {
                         publish_review_preview_entry(entry);
-                    });
+                    },
+                    app_.pause_analysis);
 
                 update_stop();
             }
@@ -1862,7 +1876,8 @@ AnalysisRunResult AnalysisCoordinator::execute()
                     suggested_name_provider,
                     [&publish_review_preview_entry](const CategorizedFile& entry) {
                         publish_review_preview_entry(entry);
-                    });
+                    },
+                    app_.pause_analysis);
             }
         }
 

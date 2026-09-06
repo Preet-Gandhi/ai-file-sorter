@@ -191,7 +191,11 @@ bool SingleInstanceCoordinator::notify_primary_instance() const
         return false;
     }
 
-    socket.flush();
+    if (!activation_message_.isEmpty()) {
+        socket.write(activation_message_.toUtf8());
+        socket.flush();
+    }
+
     socket.disconnectFromServer();
     socket.waitForDisconnected(100);
     return true;
@@ -204,8 +208,15 @@ void SingleInstanceCoordinator::handle_activation_requests()
     }
 
     bool notified = false;
+    QString message;
     while (QLocalSocket* socket = server_->nextPendingConnection()) {
         notified = true;
+        if (socket->bytesAvailable() > 0) {
+            const QByteArray data = socket->readAll();
+            if (!data.isEmpty()) {
+                message = QString::fromUtf8(data);
+            }
+        }
         socket->disconnectFromServer();
         socket->deleteLater();
     }
@@ -214,12 +225,16 @@ void SingleInstanceCoordinator::handle_activation_requests()
         return;
     }
 
-    QString message;
-    QFile message_file(activation_message_path_);
-    if (message_file.open(QIODevice::ReadOnly)) {
-        message = QString::fromUtf8(message_file.readAll());
-        message_file.close();
+    if (message.isEmpty()) {
+        QFile message_file(activation_message_path_);
+        if (message_file.open(QIODevice::ReadOnly)) {
+            message = QString::fromUtf8(message_file.readAll());
+            message_file.close();
+            QFile::remove(activation_message_path_);
+        }
+    } else {
         QFile::remove(activation_message_path_);
     }
+
     activation_callback_(message);
 }

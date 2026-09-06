@@ -253,6 +253,7 @@ QImage decode_image_with_webp_fallback(const QString& image_path,
 
 bool encode_image_as_png_bytes(const QImage& image, QByteArray& png_bytes)
 {
+    png_bytes.clear();
     QBuffer buffer(&png_bytes);
     return !image.isNull() &&
            buffer.open(QIODevice::WriteOnly) &&

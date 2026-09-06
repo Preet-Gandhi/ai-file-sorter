@@ -683,6 +683,75 @@ TEST_CASE("UndoManager relaxes timestamp validation for cloud providers") {
     REQUIRE_FALSE(std::filesystem::exists(destination));
 }
 
+class VirtualTestProvider : public IStorageProvider {
+public:
+    std::string id() const override { return "virtual_test"; }
+    StorageProviderDetection detect(const std::string&) const override {
+        return StorageProviderDetection{.provider_id = id(), .matched = true};
+    }
+    StorageProviderCapabilities capabilities() const override {
+        return StorageProviderCapabilities{.supports_online_only_files = true,
+                                           .should_relax_undo_mtime_validation = true};
+    }
+    std::vector<FileEntry> list_directory(const std::string&, FileScanOptions) const override {
+        return {};
+    }
+    StoragePathStatus inspect_path(const std::string& path) const override {
+        StoragePathStatus s;
+        s.exists = (path == dest_path);
+        return s;
+    }
+    StorageMovePreflight preflight_move(const std::string&, const std::string&) const override {
+        return StorageMovePreflight{};
+    }
+    bool path_exists(const std::string& path) const override {
+        return path == dest_path;
+    }
+    bool ensure_directory(const std::string&, std::string*) const override {
+        return true;
+    }
+    StorageMutationResult move_entry(const std::string&, const std::string&) const override {
+        return StorageMutationResult{.success = true};
+    }
+    StorageMutationResult undo_move(const std::string&, const std::string&) const override {
+        undo_called = true;
+        return StorageMutationResult{.success = true};
+    }
+
+    std::string dest_path = "virtual://remote/moved.txt";
+    mutable bool undo_called = false;
+};
+
+TEST_CASE("UndoManager routes existence checks through storage provider") {
+    TempDir undo_dir;
+    StorageProviderRegistry registry;
+    auto virtual_provider = std::make_shared<VirtualTestProvider>();
+    registry.register_builtin(virtual_provider);
+
+    const std::string source = "virtual://remote/original.txt";
+    const std::string destination = "virtual://remote/moved.txt";
+
+    UndoManager writer(undo_dir.path().string());
+    REQUIRE(writer.save_plan("virtual://remote",
+                             virtual_provider->id(),
+                             {UndoManager::Entry{
+                                 source,
+                                 destination,
+                                 0,
+                                 0}},
+                             nullptr));
+
+    UndoManager reader(undo_dir.path().string(), &registry);
+    const auto plan_path = reader.latest_plan_path();
+    REQUIRE(plan_path.has_value());
+
+    const auto undo_result = reader.undo_plan(*plan_path);
+    CHECK(virtual_provider->undo_called);
+    CHECK(undo_result.restored == 1);
+    CHECK(undo_result.skipped == 0);
+}
+
+
 TEST_CASE("CategorizationDialog rename-only updates cached filename") {
     EnvVarGuard platform_guard("QT_QPA_PLATFORM", preferred_qt_test_platform());
     QtAppContext qt_context;

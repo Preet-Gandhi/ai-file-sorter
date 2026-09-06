@@ -144,8 +144,29 @@ UpdateArchiveExtractor::ExtractionResult UpdateArchiveExtractor::extract_install
         return ExtractionResult::failure("Only ZIP update packages are supported.");
     }
 
+#ifdef _WIN32
+    zip_error_t open_error;
+    zip_error_init(&open_error);
+    zip_source_t* src = zip_source_win32w_create(archive_path.wstring().c_str(), 0, -1, &open_error);
+    if (!src) {
+        const char* message = zip_error_strerror(&open_error);
+        const std::string error_message = message ? std::string(message) : std::string("Failed to open ZIP archive.");
+        zip_error_fini(&open_error);
+        return ExtractionResult::failure(error_message);
+    }
+    zip_t* archive = zip_open_from_source(src, ZIP_RDONLY, &open_error);
+    if (!archive) {
+        const char* message = zip_error_strerror(&open_error);
+        const std::string error_message = message ? std::string(message) : std::string("Failed to open ZIP archive.");
+        zip_source_free(src);
+        zip_error_fini(&open_error);
+        return ExtractionResult::failure(error_message);
+    }
+    zip_error_fini(&open_error);
+#else
     int error_code = 0;
-    zip_t* archive = zip_open(archive_path.string().c_str(), ZIP_RDONLY, &error_code);
+    const std::string utf8_path = archive_path.string();
+    zip_t* archive = zip_open(utf8_path.c_str(), ZIP_RDONLY, &error_code);
     if (!archive) {
         zip_error_t error;
         zip_error_init_with_code(&error, error_code);
@@ -154,6 +175,7 @@ UpdateArchiveExtractor::ExtractionResult UpdateArchiveExtractor::extract_install
         zip_error_fini(&error);
         return ExtractionResult::failure(error_message);
     }
+#endif
 
     std::vector<std::pair<zip_uint64_t, std::filesystem::path>> installer_candidates;
     const zip_int64_t entry_count = zip_get_num_entries(archive, 0);

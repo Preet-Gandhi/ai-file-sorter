@@ -2,6 +2,7 @@
 #include "Base64.hpp"
 #include "EndpointUrlResolver.hpp"
 #include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <curl/curl.h>
 
@@ -239,6 +240,27 @@ std::vector<std::string> OpenAICompatibleProvider::build_headers() const {
     return headers;
 }
 
+bool OpenAICompatibleProvider::configure_curl_ssl(void* curl_handle) {
+    if (!curl_handle) {
+        return false;
+    }
+#ifdef _WIN32
+    try {
+        const auto cert_path = Utils::ensure_ca_bundle();
+        const std::string path_str = cert_path.string();
+        curl_easy_setopt(static_cast<CURL*>(curl_handle), CURLOPT_CAINFO, path_str.c_str());
+        return true;
+    } catch (const std::exception& ex) {
+        if (auto logger = Logger::get_logger("core_logger")) {
+            logger->warn("Failed to configure CA bundle for OpenAI provider: {}", ex.what());
+        }
+        return false;
+    }
+#else
+    return true;
+#endif
+}
+
 OpenAICompatibleProvider::HttpResponse OpenAICompatibleProvider::perform_curl_request(
     const std::string& url,
     const std::vector<std::string>& headers,
@@ -252,6 +274,8 @@ OpenAICompatibleProvider::HttpResponse OpenAICompatibleProvider::perform_curl_re
         res.error_message = "Failed to initialize libcurl easy handle";
         return res;
     }
+
+    (void)configure_curl_ssl(curl);
 
     struct curl_slist* header_list = nullptr;
     for (const auto& h : headers) {

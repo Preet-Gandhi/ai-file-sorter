@@ -1,9 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "ImageDecodeUtils.hpp"
 #include "Settings.hpp"
 #include "TestHelpers.hpp"
 #include "Utils.hpp"
 
+#include <QImage>
 #include <QSettings>
 
 #include <filesystem>
@@ -278,3 +280,19 @@ TEST_CASE("Settings persists selected visual model backend") {
     REQUIRE(reloaded.load());
     REQUIRE(reloaded.get_visual_model_id() == "gemma-3-4b-it");
 }
+
+TEST_CASE("ImageDecodeUtils encodes image as png bytes clearing preexisting buffer") {
+    QByteArray png_bytes;
+    png_bytes.fill('X', 10000);
+
+    QImage image(2, 2, QImage::Format_RGBA8888);
+    image.fill(Qt::red);
+
+    REQUIRE(ImageDecodeUtils::encode_image_as_png_bytes(image, png_bytes));
+    CHECK(png_bytes.size() < 1000);
+
+    QImage decoded;
+    REQUIRE(decoded.loadFromData(png_bytes, "PNG"));
+    CHECK(decoded.size() == QSize(2, 2));
+}
+

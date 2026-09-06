@@ -8,6 +8,7 @@
 #include <vector>
 #include <unordered_map>
 #include <optional>
+#include <mutex>
 #include <sqlite3.h>
 
 class DatabaseManager {
@@ -148,6 +149,7 @@ private:
     bool file_exists_in_db(const std::string &file_name, const std::string &file_path);
 
     sqlite3* db;
+    mutable std::recursive_mutex db_mutex_;
     const std::string config_dir;
     const std::string db_file;
     std::vector<TaxonomyEntry> taxonomy_entries;

@@ -44,6 +44,8 @@ public:
 
 protected:
     void changeEvent(QEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
+    void reject() override;
 
 private:
     enum class ItemStatus {
@@ -136,6 +138,7 @@ private:
     int spinner_frame_index_{0};
     QString last_announced_message_;
     bool applying_theme_styles_{false};
+    bool stop_requested_{false};
 };
 
 #endif // CATEGORIZATIONPROGRESSDIALOG_HPP

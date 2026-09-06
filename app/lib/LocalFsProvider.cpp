@@ -116,7 +116,10 @@ StorageMovePreflight LocalFsProvider::preflight_move(const std::string& source,
         return preflight;
     }
 
-    if (preflight.destination_status.exists) {
+    std::error_code eq_ec;
+    const bool is_same_file = std::filesystem::equivalent(
+        Utils::utf8_to_path(source), Utils::utf8_to_path(destination), eq_ec);
+    if (preflight.destination_status.exists && !is_same_file) {
         preflight.allowed = false;
         preflight.skipped = true;
         preflight.destination_conflict = true;

@@ -242,7 +242,17 @@ std::filesystem::path user_writable_app_data_dir()
         override_root && *override_root) {
         return std::filesystem::path(override_root) / kAppName;
     }
+    if (const char* dev_root = std::getenv("AI_FILE_SORTER_DEV_DATA_ROOT");
+        dev_root && *dev_root) {
+        return std::filesystem::path(dev_root) / kAppName;
+    }
 
+#if defined(AI_FILE_SORTER_TEST_BUILD)
+    std::error_code ec;
+    std::filesystem::path test_dir = std::filesystem::current_path() / ".testdata" / "appdata";
+    std::filesystem::create_directories(test_dir, ec);
+    return test_dir / kAppName;
+#else
 #ifdef _WIN32
     if (auto packaged_root = packaged_local_cache_root()) {
         return *packaged_root;
@@ -262,6 +272,7 @@ std::filesystem::path user_writable_app_data_dir()
 #endif
 
     throw std::runtime_error("Unable to determine writable app data directory for CA bundle");
+#endif
 }
 
 std::filesystem::path bundled_ca_bundle_path()
@@ -488,7 +499,7 @@ std::string Utils::path_to_utf8(const std::filesystem::path& path) {
     buffer.resize(static_cast<std::size_t>(written - 1));
     return buffer;
 #else
-    return path.generic_string();
+    return path.native();
 #endif
 }
 

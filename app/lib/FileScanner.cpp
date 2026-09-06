@@ -112,6 +112,15 @@ void FileScanner::scan_recursive(const fs::path& scan_path,
     std::vector<fs::path> pending_dirs;
     pending_dirs.push_back(scan_path);
 
+    std::unordered_set<std::string> visited_canonical_dirs;
+    std::error_code root_can_ec;
+    fs::path root_canonical = fs::canonical(scan_path, root_can_ec);
+    if (!root_can_ec) {
+        visited_canonical_dirs.insert(Utils::path_to_utf8(root_canonical));
+    } else {
+        visited_canonical_dirs.insert(Utils::path_to_utf8(scan_path));
+    }
+
     while (!pending_dirs.empty()) {
         const fs::path current_dir = pending_dirs.back();
         pending_dirs.pop_back();
@@ -148,7 +157,16 @@ void FileScanner::scan_recursive(const fs::path& scan_path,
                     }
                 }
                 if (is_directory && !bundle && !skip_entry) {
-                    pending_dirs.push_back(entry_path);
+                    std::error_code can_ec;
+                    fs::path canonical_path = fs::canonical(entry_path, can_ec);
+                    const std::string canonical_key = !can_ec
+                        ? Utils::path_to_utf8(canonical_path)
+                        : full_path;
+                    if (visited_canonical_dirs.insert(canonical_key).second) {
+                        pending_dirs.push_back(entry_path);
+                    } else if (context.logger) {
+                        context.logger->warn("Skipping recursive directory cycle at '{}'", full_path);
+                    }
                 }
             }
 

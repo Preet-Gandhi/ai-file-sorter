@@ -467,6 +467,65 @@ TEST_CASE("DocumentTextAnalyzer handles UTF-8 filenames") {
     CHECK(result.suggested_name == utf8_string(u8"시장_분석.txt"));
 }
 
+TEST_CASE("DocumentTextAnalyzer handles UTF-8 paths for PDF files") {
+    TempDir data_dir;
+    const auto unicode_subfolder = Utils::utf8_to_path(utf8_string(u8"테스트_한국어_폴더"));
+    const auto unicode_name = utf8_string(u8"東京_문서.pdf");
+    const auto pdf_path = data_dir.path() / unicode_subfolder / Utils::utf8_to_path(unicode_name);
+    std::filesystem::create_directories(pdf_path.parent_path());
+    {
+        std::ofstream file(pdf_path, std::ios::binary);
+        file << "%PDF-1.4\n"
+             << "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+             << "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+             << "3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /MediaBox [0 0 612 792] /Contents 5 0 R >> endobj\n"
+             << "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+             << "5 0 obj << /Length 39 >> stream\n"
+             << "BT /F1 12 Tf 72 712 Td (Invoice123) Tj ET\n"
+             << "endstream\n"
+             << "endobj\n"
+             << "xref\n"
+             << "0 6\n"
+             << "0000000000 65535 f \n"
+             << "0000000009 00000 n \n"
+             << "0000000058 00000 n \n"
+             << "0000000115 00000 n \n"
+             << "0000000222 00000 n \n"
+             << "0000000295 00000 n \n"
+             << "trailer << /Size 6 /Root 1 0 R >>\n"
+             << "startxref\n"
+             << "385\n"
+             << "%%EOF\n";
+    }
+
+    PromptCapturingLLM llm;
+    DocumentTextAnalyzer analyzer;
+
+    const auto result = analyzer.analyze(pdf_path, llm);
+
+    CHECK(!llm.last_prompt.empty());
+    CHECK(llm.last_prompt.find("Invoice123") != std::string::npos);
+}
+
+TEST_CASE("LocalFsProvider supports case-only rename preflight and move") {
+    TempDir temp;
+    const auto source_path = temp.path() / "test_file.txt";
+    write_file(source_path);
+
+    const auto dest_path = temp.path() / "TEST_FILE.TXT";
+    LocalFsProvider provider;
+    const auto preflight = provider.preflight_move(Utils::path_to_utf8(source_path),
+                                                   Utils::path_to_utf8(dest_path));
+    CHECK(preflight.allowed);
+    CHECK(!preflight.destination_conflict);
+
+    const auto move_result = provider.move_entry(Utils::path_to_utf8(source_path),
+                                                 Utils::path_to_utf8(dest_path));
+    CHECK(move_result.success);
+}
+
+
+
 TEST_CASE("StorageProviderRegistry resolves the local filesystem provider by default") {
     StorageProviderRegistry registry;
     auto local_provider = std::make_shared<LocalFsProvider>();

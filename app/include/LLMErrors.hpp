@@ -15,4 +15,10 @@ private:
     int retry_after_seconds_{0};
 };
 
+class AnalysisCancelled : public std::runtime_error {
+public:
+    explicit AnalysisCancelled(const std::string& message)
+        : std::runtime_error(message) {}
+};
+
 #endif // LLM_ERRORS_HPP

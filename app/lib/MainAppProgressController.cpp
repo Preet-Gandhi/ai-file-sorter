@@ -46,7 +46,7 @@ void MainAppProgressController::append_message(const std::string& message) const
 
 void MainAppProgressController::configure_stages(const std::vector<StagePlan>& stages) const
 {
-    dispatch_blocking([stages](CategorizationProgressDialog& dialog) {
+    dispatch_async([stages](CategorizationProgressDialog& dialog) {
         dialog.configure_stages(stages);
     });
 }
@@ -54,14 +54,14 @@ void MainAppProgressController::configure_stages(const std::vector<StagePlan>& s
 void MainAppProgressController::set_stage_items(StageId stage_id,
                                                 const std::vector<FileEntry>& items) const
 {
-    dispatch_blocking([stage_id, items](CategorizationProgressDialog& dialog) {
+    dispatch_async([stage_id, items](CategorizationProgressDialog& dialog) {
         dialog.set_stage_items(stage_id, items);
     });
 }
 
 void MainAppProgressController::set_active_stage(StageId stage_id) const
 {
-    dispatch_blocking([stage_id](CategorizationProgressDialog& dialog) {
+    dispatch_async([stage_id](CategorizationProgressDialog& dialog) {
         dialog.set_active_stage(stage_id);
     });
 }
@@ -69,7 +69,7 @@ void MainAppProgressController::set_active_stage(StageId stage_id) const
 void MainAppProgressController::mark_stage_item_in_progress(StageId stage_id,
                                                             const FileEntry& entry) const
 {
-    dispatch_blocking([stage_id, entry](CategorizationProgressDialog& dialog) {
+    dispatch_async([stage_id, entry](CategorizationProgressDialog& dialog) {
         dialog.mark_stage_item_in_progress(stage_id, entry);
     });
 }
@@ -77,7 +77,7 @@ void MainAppProgressController::mark_stage_item_in_progress(StageId stage_id,
 void MainAppProgressController::mark_stage_item_completed(StageId stage_id,
                                                           const FileEntry& entry) const
 {
-    dispatch_blocking([stage_id, entry](CategorizationProgressDialog& dialog) {
+    dispatch_async([stage_id, entry](CategorizationProgressDialog& dialog) {
         dialog.mark_stage_item_completed(stage_id, entry);
     });
 }
@@ -85,7 +85,7 @@ void MainAppProgressController::mark_stage_item_completed(StageId stage_id,
 void MainAppProgressController::mark_stage_item_skipped(StageId stage_id,
                                                         const FileEntry& entry) const
 {
-    dispatch_blocking([stage_id, entry](CategorizationProgressDialog& dialog) {
+    dispatch_async([stage_id, entry](CategorizationProgressDialog& dialog) {
         dialog.mark_stage_item_skipped(stage_id, entry);
     });
 }

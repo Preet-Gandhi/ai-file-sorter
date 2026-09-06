@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <mutex>
 
 struct sqlite3;
 
@@ -330,5 +331,6 @@ private:
     std::string normalize_label(const std::string& value) const;
 
     sqlite3* db_{nullptr};
+    mutable std::recursive_mutex mutex_;
     std::filesystem::path db_file_;
 };

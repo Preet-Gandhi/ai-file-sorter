@@ -158,6 +158,18 @@ public:
      * @brief Requests cancellation of the currently running analysis, if any.
      */
     void request_stop_analysis();
+    /**
+     * @brief Pauses the currently running analysis workflow before starting the next item.
+     */
+    void pause_analysis_workflow();
+    /**
+     * @brief Resumes the paused analysis workflow.
+     */
+    void resume_analysis_workflow();
+    /**
+     * @brief Returns whether the analysis workflow is currently paused.
+     */
+    bool is_analysis_paused() const;
 
     /**
      * @brief Returns the currently selected folder path from the UI.
@@ -598,6 +610,7 @@ private:
     std::thread analyze_thread;
     std::jthread backend_status_probe_thread_;
     std::atomic<bool> stop_analysis{false};
+    std::atomic<bool> pause_analysis{false};
     std::optional<AnalysisRuntimeLock::Lease> analysis_runtime_lease_;
     QTimer* analysis_runtime_lock_timer_{nullptr};
     bool analysis_in_progress_{false};

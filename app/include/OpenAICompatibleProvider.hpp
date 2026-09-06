@@ -85,6 +85,7 @@ public:
                                                               long latency_ms);
     [[nodiscard]] static std::vector<std::string> parse_models_list(const std::string& json_response);
     [[nodiscard]] static std::string mask_api_key(const std::string& key);
+    [[nodiscard]] static bool configure_curl_ssl(void* curl_handle);
 
 private:
     Config m_config;

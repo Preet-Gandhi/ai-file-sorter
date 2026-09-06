@@ -103,7 +103,8 @@ public:
         std::function<std::unique_ptr<ILLMClient>()> llm_factory,
         const PromptOverrideProvider& prompt_override = {},
         const SuggestedNameProvider& suggested_name_provider = {},
-        const ResultCallback& result_callback = {}) const;
+        const ResultCallback& result_callback = {},
+        std::atomic<bool>* pause_flag = nullptr) const;
 
 private:
     using CategoryPair = std::pair<std::string, std::string>;
@@ -137,7 +138,8 @@ private:
         FileType file_type,
         const ProgressCallback& progress_callback,
         const std::string& consistency_context,
-        const RemoteThrottleCallback& remote_throttle_callback) const;
+        const RemoteThrottleCallback& remote_throttle_callback,
+        const std::atomic<bool>* stop_flag = nullptr) const;
 
     /**
      * @brief Categorizes a single entry and persists the result.
@@ -207,7 +209,8 @@ private:
         const std::string& prompt_path,
         const ProgressCallback& progress_callback,
         const std::string& combined_context,
-        const RemoteThrottleCallback& remote_throttle_callback) const;
+        const RemoteThrottleCallback& remote_throttle_callback,
+        const std::atomic<bool>* stop_flag = nullptr) const;
     /**
      * @brief Handles empty or invalid categorization results.
      * @param entry File entry being categorized.
@@ -249,6 +252,7 @@ private:
      * @param file_type File or directory.
      * @param is_local_llm True when using a local LLM backend.
      * @param consistency_context Consistency hints block.
+     * @param stop_flag Optional atomic cancellation flag.
      * @return Raw LLM response string.
      */
     std::string run_llm_with_timeout(
@@ -257,7 +261,16 @@ private:
         const std::string& item_path,
         FileType file_type,
         bool is_local_llm,
-        const std::string& consistency_context) const;
+        const std::string& consistency_context,
+        const std::atomic<bool>* stop_flag = nullptr) const;
+    std::string run_llm_with_timeout(
+        std::shared_ptr<ILLMClient> llm,
+        const std::string& item_name,
+        const std::string& item_path,
+        FileType file_type,
+        bool is_local_llm,
+        const std::string& consistency_context,
+        const std::atomic<bool>* stop_flag = nullptr) const;
     /**
      * @brief Resolves the LLM timeout based on runtime and environment settings.
      * @param is_local_llm True when using a local LLM backend.
@@ -278,7 +291,7 @@ private:
      * @param consistency_context Consistency hints block.
      * @return Future that yields the raw LLM response.
      */
-    std::future<std::string> start_llm_future(ILLMClient& llm,
+    std::future<std::string> start_llm_future(std::shared_ptr<ILLMClient> llm,
                                               const std::string& item_name,
                                               const std::string& item_path,
                                               FileType file_type,
@@ -405,7 +418,8 @@ private:
         const std::string& prompt_path,
         FileType file_type,
         const ProgressCallback& progress_callback,
-        const std::string& consistency_context) const;
+        const std::string& consistency_context,
+        const std::atomic<bool>* stop_flag = nullptr) const;
 
     /**
      * @brief Emits a formatted progress message for a categorization event.

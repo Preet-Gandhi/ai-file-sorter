@@ -1240,7 +1240,7 @@ void CategorizationDialog::on_confirm_and_sort_button_clicked()
             std::string to_label;
             std::string destination;
 #ifdef _WIN32
-            const char sep = '\\\\';
+            const char sep = '\\';
 #else
             const char sep = '/';
 #endif
@@ -1408,7 +1408,9 @@ void CategorizationDialog::handle_selected_row(int row_index,
             }
             return;
         }
-        if (!storage_provider_ || storage_provider_->path_exists(Utils::path_to_utf8(dest_path))) {
+        std::error_code eq_ec;
+        const bool is_same_file = std::filesystem::equivalent(source_path, dest_path, eq_ec);
+        if (!storage_provider_ || (storage_provider_->path_exists(Utils::path_to_utf8(dest_path)) && !is_same_file)) {
             update_status_column(row_index, false);
             files_not_moved.push_back(file_name);
             if (core_logger) {

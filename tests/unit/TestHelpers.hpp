@@ -88,18 +88,75 @@ private:
     std::optional<std::string> original_;
 };
 
+inline std::filesystem::path test_sandbox_root() {
+    if (const char* env = std::getenv("AI_FILE_SORTER_TEST_TEMP_DIR"); env && *env) {
+        return std::filesystem::path(env);
+    }
+    if (const char* env_cfg = std::getenv("AI_FILE_SORTER_CONFIG_DIR"); env_cfg && *env_cfg) {
+        return std::filesystem::path(env_cfg) / "tmp";
+    }
+    std::error_code ec;
+    std::filesystem::path cur = std::filesystem::current_path();
+    while (!cur.empty()) {
+        if (std::filesystem::exists(cur / ".testdata", ec) ||
+            std::filesystem::exists(cur / "app" / "CMakeLists.txt", ec)) {
+            const auto target = cur / ".testdata" / "tmp";
+            std::filesystem::create_directories(target, ec);
+            return target;
+        }
+        if (cur == cur.parent_path()) {
+            break;
+        }
+        cur = cur.parent_path();
+    }
+    return std::filesystem::temp_directory_path();
+}
+
+namespace Detail {
+inline void bootstrap_test_sandbox() {
+    static const bool initialized = []() {
+        if (!std::getenv("AI_FILE_SORTER_CONFIG_DIR")) {
+            std::error_code ec;
+            std::filesystem::path cur = std::filesystem::current_path();
+            while (!cur.empty()) {
+                if (std::filesystem::exists(cur / ".testdata", ec) ||
+                    std::filesystem::exists(cur / "app" / "CMakeLists.txt", ec)) {
+                    const auto config_dir = cur / ".testdata" / "config";
+                    std::filesystem::create_directories(config_dir, ec);
+#ifdef _WIN32
+                    _putenv_s("AI_FILE_SORTER_CONFIG_DIR", config_dir.string().c_str());
+#else
+                    setenv("AI_FILE_SORTER_CONFIG_DIR", config_dir.string().c_str(), 1);
+#endif
+                    break;
+                }
+                if (cur == cur.parent_path()) {
+                    break;
+                }
+                cur = cur.parent_path();
+            }
+        }
+        return true;
+    }();
+    (void)initialized;
+}
+} // namespace Detail
+
 /**
- * @brief Creates a temporary directory and cleans it up on destruction.
+ * @brief Creates a temporary directory inside the repository test sandbox and cleans it up on destruction.
  */
 class TempDir {
 public:
     /**
-     * @brief Create a unique temporary directory.
+     * @brief Create a unique temporary directory inside the repository test sandbox.
      */
-    TempDir()
-        : path_(std::filesystem::temp_directory_path() /
-                make_unique_token("aifs-test-")) {
-        std::filesystem::create_directories(path_);
+    TempDir() {
+        Detail::bootstrap_test_sandbox();
+        std::error_code ec;
+        const auto root = test_sandbox_root();
+        std::filesystem::create_directories(root, ec);
+        path_ = root / make_unique_token("aifs-test-");
+        std::filesystem::create_directories(path_, ec);
     }
 
     /**

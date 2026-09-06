@@ -9,6 +9,7 @@
 
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QColor>
 #include <QEvent>
 #include <QFrame>
@@ -195,6 +196,10 @@ void CategorizationProgressDialog::configure_stages(const std::vector<StagePlan>
     active_stage_order_.clear();
     active_stage_.reset();
     item_states_.clear();
+    stop_requested_ = false;
+    if (stop_button) {
+        stop_button->setEnabled(true);
+    }
 
     for (auto& stage_state : stage_states_) {
         stage_state.enabled = false;
@@ -329,8 +334,28 @@ void CategorizationProgressDialog::mark_stage_item_skipped(StageId stage_id,
 }
 
 
+void CategorizationProgressDialog::closeEvent(QCloseEvent* event)
+{
+    request_stop();
+    if (event) {
+        event->ignore();
+    }
+}
+
+void CategorizationProgressDialog::reject()
+{
+    request_stop();
+}
+
 void CategorizationProgressDialog::request_stop()
 {
+    if (stop_requested_) {
+        return;
+    }
+    stop_requested_ = true;
+    if (stop_button) {
+        stop_button->setEnabled(false);
+    }
     if (!main_app) {
         return;
     }

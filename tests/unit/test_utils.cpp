@@ -2,6 +2,7 @@
 #include "Utils.hpp"
 #include "TestHooks.hpp"
 #include "TestHelpers.hpp"
+#include "IniConfig.hpp"
 #include <optional>
 #include <filesystem>
 #include <fstream>
@@ -105,4 +106,22 @@ TEST_CASE("sanitize_path_label preserves valid Unicode emoji labels") {
 TEST_CASE("format_size keeps byte values in bytes below one kilobyte") {
     REQUIRE(Utils::format_size(999) == "999.00 B");
     REQUIRE(Utils::format_size(1024) == "1.00 KB");
+}
+
+TEST_CASE("IniConfig saves configuration atomically and creates parent directories", "[iniconfig]") {
+    TempDir temp_dir;
+    const auto config_path = temp_dir.path() / "nested" / "subdir" / "settings.ini";
+    REQUIRE_FALSE(std::filesystem::exists(config_path.parent_path()));
+
+    IniConfig config;
+    config.setValue("General", "Theme", "Dark");
+    config.setValue("General", "AutoSort", "true");
+
+    REQUIRE(config.save(config_path.string()));
+    REQUIRE(std::filesystem::exists(config_path));
+
+    IniConfig loaded;
+    REQUIRE(loaded.load(config_path.string()));
+    CHECK(loaded.getValue("General", "Theme") == "Dark");
+    CHECK(loaded.getValue("General", "AutoSort") == "true");
 }

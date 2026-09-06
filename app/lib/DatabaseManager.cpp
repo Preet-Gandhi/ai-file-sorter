@@ -13,6 +13,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <filesystem>
 
 #include <sqlite3.h>
 #include <spdlog/spdlog.h>
@@ -252,9 +253,23 @@ DatabaseManager::DatabaseManager(std::string config_dir)
         return;
     }
 
+    std::error_code ec;
+    std::filesystem::create_directories(this->config_dir, ec);
+    if (ec) {
+        db_log(spdlog::level::err, "Failed to create database directory '{}': {}", this->config_dir, ec.message());
+        return;
+    }
+
+#ifdef _WIN32
+    if (sqlite3_open16(std::filesystem::u8path(db_file).wstring().c_str(), &db) != SQLITE_OK) {
+#else
     if (sqlite3_open(db_file.c_str(), &db) != SQLITE_OK) {
-        db_log(spdlog::level::err, "Can't open database: {}", sqlite3_errmsg(db));
-        db = nullptr;
+#endif
+        db_log(spdlog::level::err, "Can't open database: {}", db ? sqlite3_errmsg(db) : "unknown error");
+        if (db) {
+            sqlite3_close(db);
+            db = nullptr;
+        }
         return;
     }
 
@@ -270,6 +285,7 @@ DatabaseManager::DatabaseManager(std::string config_dir)
 }
 
 DatabaseManager::~DatabaseManager() {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (db) {
         sqlite3_close(db);
         db = nullptr;
@@ -1001,6 +1017,7 @@ DatabaseManager::ResolvedCategory DatabaseManager::build_resolved_category(
 DatabaseManager::ResolvedCategory
 DatabaseManager::resolve_category(const std::string &category,
                                   const std::string &subcategory) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     ResolvedCategory result{-1, category, subcategory};
     if (!db) {
         return result;
@@ -1031,6 +1048,7 @@ DatabaseManager::ResolvedCategory
 DatabaseManager::resolve_category_for_language(const std::string& category,
                                                const std::string& subcategory,
                                                CategoryLanguage language) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (language == CategoryLanguage::English || !db) {
         return resolve_category(category, subcategory);
     }
@@ -1083,6 +1101,7 @@ DatabaseManager::resolve_category_for_language(const std::string& category,
 std::optional<DatabaseManager::ResolvedCategory>
 DatabaseManager::get_category_translation(int taxonomy_id,
                                           CategoryLanguage language) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (language == CategoryLanguage::English || taxonomy_id <= 0) {
         return std::nullopt;
     }
@@ -1096,6 +1115,7 @@ DatabaseManager::get_category_translation(int taxonomy_id,
 DatabaseManager::ResolvedCategory
 DatabaseManager::localize_category(const ResolvedCategory& resolved,
                                    CategoryLanguage language) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (language == CategoryLanguage::English || resolved.taxonomy_id <= 0) {
         return resolved;
     }
@@ -1110,6 +1130,7 @@ DatabaseManager::localize_category(const ResolvedCategory& resolved,
 
 CategorizedFile DatabaseManager::localize_categorized_file(const CategorizedFile& entry,
                                                            CategoryLanguage language) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     CategorizedFile localized = entry;
     if (localized.canonical_category.empty()) {
         localized.canonical_category = entry.category;
@@ -1128,6 +1149,7 @@ bool DatabaseManager::upsert_category_translation(int taxonomy_id,
                                                   CategoryLanguage language,
                                                   const std::string& category,
                                                   const std::string& subcategory) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db || taxonomy_id <= 0 || language == CategoryLanguage::English) {
         return false;
     }
@@ -1198,6 +1220,7 @@ bool DatabaseManager::insert_or_update_file_with_categorization(
     const std::string &suggested_name,
     bool rename_only,
     bool rename_applied) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) return false;
 
     const char *sql = R"(
@@ -1259,6 +1282,7 @@ bool DatabaseManager::insert_or_update_file_with_categorization(
 bool DatabaseManager::remove_file_categorization(const std::string& dir_path,
                                                  const std::string& file_name,
                                                  const FileType file_type) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) {
         return false;
     }
@@ -1289,6 +1313,7 @@ bool DatabaseManager::remove_file_categorization(const std::string& dir_path,
 
 bool DatabaseManager::clear_directory_categorizations(const std::string& dir_path,
                                                       bool recursive) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) {
         return false;
     }
@@ -1318,6 +1343,7 @@ bool DatabaseManager::clear_directory_categorizations(const std::string& dir_pat
 
 bool DatabaseManager::clear_all_categorizations(bool clear_taxonomy)
 {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) {
         return false;
     }
@@ -1381,6 +1407,7 @@ bool DatabaseManager::clear_all_categorizations(bool clear_taxonomy)
 bool DatabaseManager::has_categorization_style_conflict(const std::string& dir_path,
                                                         bool desired_style,
                                                         bool recursive) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) {
         return false;
     }
@@ -1413,6 +1440,7 @@ bool DatabaseManager::has_categorization_style_conflict(const std::string& dir_p
 }
 
 std::optional<bool> DatabaseManager::get_directory_categorization_style(const std::string& dir_path) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) {
         return std::nullopt;
     }
@@ -1440,6 +1468,7 @@ std::optional<bool> DatabaseManager::get_directory_categorization_style(const st
 
 std::vector<CategorizedFile>
 DatabaseManager::remove_empty_categorizations(const std::string& dir_path) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<CategorizedFile> removed;
     if (!db) {
         return removed;
@@ -1497,6 +1526,7 @@ DatabaseManager::remove_empty_categorizations(const std::string& dir_path) {
 }
 
 void DatabaseManager::increment_taxonomy_frequency(int taxonomy_id) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db || taxonomy_id <= 0) return;
 
     const char *sql =
@@ -1519,6 +1549,7 @@ void DatabaseManager::increment_taxonomy_frequency(int taxonomy_id) {
 
 std::vector<CategorizedFile>
 DatabaseManager::get_categorized_files(const std::string &directory_path) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<CategorizedFile> categorized_files;
     if (!db) return categorized_files;
 
@@ -1547,6 +1578,7 @@ DatabaseManager::get_categorized_files(const std::string &directory_path) {
 
 std::vector<CategorizedFile>
 DatabaseManager::get_categorized_files_recursive(const std::string& directory_path) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<CategorizedFile> categorized_files;
     if (!db) {
         return categorized_files;
@@ -1586,6 +1618,7 @@ std::optional<CategorizedFile>
 DatabaseManager::get_categorized_file(const std::string& dir_path,
                                       const std::string& file_name,
                                       FileType file_type) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) {
         return std::nullopt;
     }
@@ -1623,6 +1656,7 @@ std::vector<std::string>
 DatabaseManager::get_categorization_from_db(const std::string& dir_path,
                                             const std::string& file_name,
                                             FileType file_type) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<std::string> categorization;
     if (!db) return categorization;
 
@@ -1662,6 +1696,7 @@ DatabaseManager::get_categorization_from_db(const std::string& dir_path,
 }
 
 bool DatabaseManager::is_file_already_categorized(const std::string &file_name) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db) return false;
 
     const char *sql = "SELECT 1 FROM file_categorization WHERE file_name = ? LIMIT 1;";
@@ -1677,6 +1712,7 @@ bool DatabaseManager::is_file_already_categorized(const std::string &file_name) 
 }
 
 std::vector<std::string> DatabaseManager::get_dir_contents_from_db(const std::string &dir_path) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<std::string> results;
     if (!db) return results;
 
@@ -1699,6 +1735,7 @@ std::vector<std::pair<std::string, std::string>> DatabaseManager::get_taxonomy_s
     std::size_t max_entries,
     CategoryLanguage language) const
 {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<std::pair<std::string, std::string>> snapshot;
     if (max_entries == 0) {
         max_entries = taxonomy_entries.size();
@@ -1759,6 +1796,7 @@ DatabaseManager::get_recent_categories_for_extension(const std::string& extensio
                                                      FileType file_type,
                                                      std::size_t limit) const
 {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<std::pair<std::string, std::string>> results;
     if (!db || limit == 0) {
         return results;
@@ -1812,6 +1850,7 @@ DatabaseManager::get_recent_categories_for_extension(const std::string& extensio
 }
 
 std::string DatabaseManager::get_cached_category(const std::string &file_name) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     auto iter = cached_results.find(file_name);
     if (iter != cached_results.end()) {
         return iter->second;
@@ -1820,6 +1859,7 @@ std::string DatabaseManager::get_cached_category(const std::string &file_name) {
 }
 
 void DatabaseManager::load_cache() {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     cached_results.clear();
 }
 

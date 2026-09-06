@@ -785,6 +785,16 @@ std::string Settings::define_config_path()
         std::filesystem::path base = override_root;
         return (base / AppName / "config.ini").string();
     }
+    if (const char* dev_root = std::getenv("AI_FILE_SORTER_DEV_DATA_ROOT")) {
+        std::filesystem::path base = dev_root;
+        return (base / AppName / "config.ini").string();
+    }
+#if defined(AI_FILE_SORTER_TEST_BUILD)
+    std::error_code ec;
+    std::filesystem::path test_cfg = std::filesystem::current_path() / ".testdata" / "config";
+    std::filesystem::create_directories(test_cfg, ec);
+    return (test_cfg / AppName / "config.ini").string();
+#else
 #ifdef _WIN32
     char appDataPath[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_APPDATA, NULL, 0, appDataPath))) {
@@ -796,6 +806,7 @@ std::string Settings::define_config_path()
     return std::string(getenv("HOME")) + "/.config/" + AppName + "/config.ini";
 #endif
     return "config.ini";
+#endif
 }
 
 

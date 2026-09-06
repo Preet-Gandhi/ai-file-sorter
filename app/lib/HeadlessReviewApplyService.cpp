@@ -166,7 +166,9 @@ bool validate_filename(const std::string& name, std::string* error)
         }
         return false;
     }
-    if (has_leading_or_trailing_space_or_dot(name)) {
+    const unsigned char first = static_cast<unsigned char>(name.front());
+    const unsigned char last = static_cast<unsigned char>(name.back());
+    if (std::isspace(first) || std::isspace(last) || name.back() == '.') {
         if (error) {
             *error = "Filename has leading/trailing space or dot.";
         }

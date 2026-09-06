@@ -1523,6 +1523,7 @@ void MainApp::on_analyze_clicked()
     }
 
     stop_analysis = false;
+    pause_analysis = false;
     text_cpu_fallback_choice_.reset();
     visual_cpu_fallback_choice_.reset();
     continue_without_visual_analysis_choice_.reset();
@@ -2591,6 +2592,7 @@ void MainApp::handle_analysis_finished()
     close_progress_dialog();
 
     stop_analysis = false;
+    pause_analysis = false;
 
     if (new_files_to_sort.empty()) {
         handle_no_files_to_sort();
@@ -2613,6 +2615,7 @@ void MainApp::handle_analysis_cancelled()
     close_progress_dialog();
 
     stop_analysis = false;
+    pause_analysis = false;
     statusBar()->showMessage(tr("Analysis cancelled"), 4000);
 }
 
@@ -2626,6 +2629,7 @@ void MainApp::handle_analysis_failure(const std::string& message)
     release_analysis_runtime_lock();
     close_progress_dialog();
     stop_analysis = false;
+    pause_analysis = false;
     show_error_dialog(message);
 }
 
@@ -2826,7 +2830,8 @@ AnalysisWorkflowContext MainApp::make_analysis_workflow_context()
         [this](const std::string& reason) { return prompt_continue_without_visual_analysis(reason); },
         [this](const CategorizedFile& entry, const std::string& reason) {
             notify_recategorization_reset(entry, reason);
-        }};
+        },
+        &pause_analysis};
 }
 
 void MainApp::perform_analysis()
@@ -2981,8 +2986,26 @@ void MainApp::run_large_whitelist_llm_test()
 void MainApp::request_stop_analysis()
 {
     stop_analysis = true;
+    pause_analysis = false;
     statusBar()->showMessage(tr("Cancelling analysis…"), 4000);
     status_is_ready_ = false;
+}
+
+void MainApp::pause_analysis_workflow()
+{
+    pause_analysis = true;
+    statusBar()->showMessage(tr("Pausing analysis…"), 3000);
+}
+
+void MainApp::resume_analysis_workflow()
+{
+    pause_analysis = false;
+    statusBar()->showMessage(tr("Resuming analysis…"), 3000);
+}
+
+bool MainApp::is_analysis_paused() const
+{
+    return pause_analysis.load();
 }
 
 bool MainApp::prompt_text_cpu_fallback(const std::string& reason)

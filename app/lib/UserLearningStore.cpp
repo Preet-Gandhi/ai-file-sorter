@@ -212,7 +212,11 @@ UserLearningStore::UserLearningStore(std::string config_dir)
         return;
     }
 
+#ifdef _WIN32
+    if (sqlite3_open16(db_file_.wstring().c_str(), &db_) != SQLITE_OK) {
+#else
     if (sqlite3_open(db_file_.string().c_str(), &db_) != SQLITE_OK) {
+#endif
         if (auto logger = Logger::get_logger("db_logger")) {
             logger->error("Can't open user learning database '{}': {}",
                           db_file_.string(),
@@ -244,6 +248,7 @@ UserLearningStore::UserLearningStore(std::string config_dir)
 
 UserLearningStore::~UserLearningStore()
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (db_) {
         sqlite3_close(db_);
         db_ = nullptr;
@@ -350,6 +355,7 @@ bool UserLearningStore::initialize_schema(std::string* error)
 
 bool UserLearningStore::record_approved_mapping(const ApprovedMapping& mapping, std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         if (error) {
             *error = "User learning database is not open.";
@@ -379,6 +385,7 @@ bool UserLearningStore::record_approved_mapping(const ApprovedMapping& mapping, 
 
 int UserLearningStore::resolve_taxonomy_entry(const ApprovedMapping& mapping, std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return resolve_taxonomy_entry(mapping.category,
                                   mapping.subcategory,
                                   mapping.source,
@@ -388,6 +395,7 @@ int UserLearningStore::resolve_taxonomy_entry(const ApprovedMapping& mapping, st
 
 bool UserLearningStore::record_taxonomy_candidate(const TaxonomyCandidate& candidate, std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         if (error) {
             *error = "User learning database is not open.";
@@ -408,6 +416,7 @@ bool UserLearningStore::record_taxonomy_candidate(const TaxonomyCandidate& candi
 bool UserLearningStore::import_taxonomy_candidates(const std::vector<TaxonomyCandidate>& candidates,
                                                    std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         if (error) {
             *error = "User learning database is not open.";
@@ -447,6 +456,7 @@ bool UserLearningStore::import_taxonomy_candidates(const std::vector<TaxonomyCan
 bool UserLearningStore::remove_taxonomy_candidates_with_source_prefix(const std::string& source_prefix,
                                                                       std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         if (error) {
             *error = "User learning database is not open.";
@@ -714,6 +724,7 @@ std::optional<UserLearningStore::TaxonomyEntry>
 UserLearningStore::find_taxonomy_entry(const std::string& category,
                                        const std::string& subcategory) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         return std::nullopt;
     }
@@ -748,6 +759,7 @@ UserLearningStore::find_taxonomy_entry(const std::string& category,
 std::vector<UserLearningStore::RetrievedCandidate>
 UserLearningStore::retrieve_taxonomy_candidates(const std::string& query_text, std::size_t limit) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<RetrievedCandidate> candidates;
     if (!db_ || limit == 0) {
         return candidates;
@@ -861,6 +873,7 @@ UserLearningStore::retrieve_taxonomy_candidates(const std::string& query_text, s
 
 bool UserLearningStore::rebuild_taxonomy_embeddings(std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         if (error) {
             *error = "User learning database is not open.";
@@ -902,6 +915,7 @@ bool UserLearningStore::rebuild_taxonomy_embeddings(std::string* error)
 
 bool UserLearningStore::clear_all(std::string* error)
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         if (error) {
             *error = "User learning database is not open.";
@@ -929,6 +943,7 @@ bool UserLearningStore::clear_all(std::string* error)
 std::optional<UserLearningStore::TaxonomyEmbedding>
 UserLearningStore::taxonomy_embedding(int taxonomy_entry_id, const std::string& embedding_model) const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_ || taxonomy_entry_id <= 0) {
         return std::nullopt;
     }
@@ -965,6 +980,7 @@ UserLearningStore::taxonomy_embedding(int taxonomy_entry_id, const std::string& 
 
 int UserLearningStore::taxonomy_embedding_count() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         return 0;
     }
@@ -1101,6 +1117,7 @@ std::string UserLearningStore::embedding_source_text_for_taxonomy_entry(int taxo
 
 std::vector<UserLearningStore::TaxonomyEntry> UserLearningStore::taxonomy_entries() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<TaxonomyEntry> entries;
     if (!db_) {
         return entries;
@@ -1131,6 +1148,7 @@ std::vector<UserLearningStore::TaxonomyEntry> UserLearningStore::taxonomy_entrie
 
 int UserLearningStore::taxonomy_entry_count() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         return 0;
     }
@@ -1144,6 +1162,7 @@ int UserLearningStore::taxonomy_entry_count() const
 
 std::vector<UserLearningStore::ApprovedExample> UserLearningStore::approved_examples() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::vector<ApprovedExample> examples;
     if (!db_) {
         return examples;
@@ -1191,6 +1210,7 @@ std::vector<UserLearningStore::ApprovedExample> UserLearningStore::approved_exam
 
 int UserLearningStore::approved_example_count() const
 {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!db_) {
         return 0;
     }

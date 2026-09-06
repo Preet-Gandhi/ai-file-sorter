@@ -2313,3 +2313,428 @@ TEST_CASE("CategorizationService strips inline subcategory label artifacts when 
     CHECK(categorized.front().subcategory == "Funny seals");
     CHECK(*calls == 1);
 }
+
+TEST_CASE("CategorizationService processes files strictly sequentially and awaits each response") {
+    TempDir base_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", base_dir.path().string());
+    Settings settings;
+    DatabaseManager db(settings.get_config_dir());
+    CategorizationService service(settings, db, nullptr);
+
+    TempDir data_dir;
+    const std::vector<FileEntry> files = {
+        FileEntry{(data_dir.path() / "doc1.txt").string(), "doc1.txt", FileType::File},
+        FileEntry{(data_dir.path() / "doc2.txt").string(), "doc2.txt", FileType::File},
+        FileEntry{(data_dir.path() / "doc3.txt").string(), "doc3.txt", FileType::File}
+    };
+
+    std::atomic<int> concurrent_requests{0};
+    std::atomic<int> max_concurrent_observed{0};
+    std::vector<std::string> processed_order;
+    std::mutex order_mutex;
+
+    class SequentialCheckLLM : public ILLMClient {
+    public:
+        SequentialCheckLLM(std::atomic<int>& concurrent,
+                           std::atomic<int>& max_concurrent,
+                           std::vector<std::string>& order,
+                           std::mutex& mtx)
+            : concurrent_(concurrent),
+              max_concurrent_(max_concurrent),
+              order_(order),
+              mtx_(mtx) {}
+
+        std::string categorize_file(const std::string& file_name,
+                                    const std::string&,
+                                    FileType,
+                                    const std::string&) override {
+            const int active = ++concurrent_;
+            int prev_max = max_concurrent_.load();
+            while (active > prev_max && !max_concurrent_.compare_exchange_weak(prev_max, active)) {}
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+            {
+                std::lock_guard<std::mutex> lock(mtx_);
+                order_.push_back(file_name);
+            }
+
+            --concurrent_;
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        std::string complete_prompt(const std::string&, int) override {
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        void set_prompt_logging_enabled(bool) override {}
+
+    private:
+        std::atomic<int>& concurrent_;
+        std::atomic<int>& max_concurrent_;
+        std::vector<std::string>& order_;
+        std::mutex& mtx_;
+    };
+
+    std::atomic<bool> stop_flag{false};
+    auto factory = [&]() {
+        return std::make_unique<SequentialCheckLLM>(concurrent_requests,
+                                                    max_concurrent_observed,
+                                                    processed_order,
+                                                    order_mutex);
+    };
+
+    const auto categorized = service.categorize_entries(files,
+                                                        true,
+                                                        stop_flag,
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        factory);
+
+    REQUIRE(categorized.size() == 3);
+    CHECK(max_concurrent_observed.load() == 1);
+    REQUIRE(processed_order.size() == 3);
+    CHECK(processed_order[0] == "doc1.txt");
+    CHECK(processed_order[1] == "doc2.txt");
+    CHECK(processed_order[2] == "doc3.txt");
+}
+
+TEST_CASE("CategorizationService interrupts in-flight LLM requests promptly when cancellation is asserted") {
+    TempDir base_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", base_dir.path().string());
+    Settings settings;
+    DatabaseManager db(settings.get_config_dir());
+    CategorizationService service(settings, db, nullptr);
+
+    TempDir data_dir;
+    const std::vector<FileEntry> files = {
+        FileEntry{(data_dir.path() / "slow1.txt").string(), "slow1.txt", FileType::File},
+        FileEntry{(data_dir.path() / "slow2.txt").string(), "slow2.txt", FileType::File}
+    };
+
+    std::atomic<bool> stop_flag{false};
+    std::atomic<int> calls_started{0};
+
+    class SlowCancellableLLM : public ILLMClient {
+    public:
+        SlowCancellableLLM(std::atomic<bool>& stop, std::atomic<int>& starts)
+            : stop_(stop), starts_(starts) {}
+
+        std::string categorize_file(const std::string&,
+                                    const std::string&,
+                                    FileType,
+                                    const std::string&) override {
+            ++starts_;
+            // Simulate background stop assertion during request
+            stop_.store(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        std::string complete_prompt(const std::string&, int) override {
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        void set_prompt_logging_enabled(bool) override {}
+
+    private:
+        std::atomic<bool>& stop_;
+        std::atomic<int>& starts_;
+    };
+
+    auto factory = [&]() {
+        return std::make_unique<SlowCancellableLLM>(stop_flag, calls_started);
+    };
+
+    const auto categorized = service.categorize_entries(files,
+                                                        true,
+                                                        stop_flag,
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        factory);
+
+    // After stop_flag is set during the first item, subsequent files are never started
+    CHECK(calls_started.load() == 1);
+    CHECK(categorized.empty());
+}
+
+TEST_CASE("CategorizationService pause prevents additional work and resume continues correctly") {
+    TempDir base_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", base_dir.path().string());
+    Settings settings;
+    DatabaseManager db(settings.get_config_dir());
+    CategorizationService service(settings, db, nullptr);
+
+    TempDir data_dir;
+    const std::vector<FileEntry> files = {
+        FileEntry{(data_dir.path() / "pause1.txt").string(), "pause1.txt", FileType::File},
+        FileEntry{(data_dir.path() / "pause2.txt").string(), "pause2.txt", FileType::File},
+        FileEntry{(data_dir.path() / "pause3.txt").string(), "pause3.txt", FileType::File}
+    };
+
+    std::atomic<bool> stop_flag{false};
+    std::atomic<bool> pause_flag{false};
+    std::atomic<int> completed_count{0};
+    std::vector<std::string> completed_names;
+    std::mutex names_mutex;
+
+    class FastTestLLM : public ILLMClient {
+    public:
+        std::string categorize_file(const std::string& file_name,
+                                    const std::string&,
+                                    FileType,
+                                    const std::string&) override {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        std::string complete_prompt(const std::string&, int) override {
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        void set_prompt_logging_enabled(bool) override {}
+    };
+
+    auto factory = []() { return std::make_unique<FastTestLLM>(); };
+
+    // When pause1.txt finishes, set pause_flag to true
+    auto completion_callback = [&](const FileEntry& entry) {
+        {
+            std::lock_guard<std::mutex> lock(names_mutex);
+            completed_names.push_back(entry.file_name);
+        }
+        const int count = ++completed_count;
+        if (count == 1) {
+            pause_flag.store(true);
+        }
+    };
+
+    // Background thread that verifies pause is respected, then resumes
+    std::thread unpause_worker([&]() {
+        // Wait until first item is paused
+        while (!pause_flag.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        // Verify that while paused, no additional items complete
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        CHECK(completed_count.load() == 1);
+
+        // Resume analysis
+        pause_flag.store(false);
+    });
+
+    const auto categorized = service.categorize_entries(files,
+                                                        true,
+                                                        stop_flag,
+                                                        {},
+                                                        {},
+                                                        completion_callback,
+                                                        {},
+                                                        factory,
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        &pause_flag);
+
+    if (unpause_worker.joinable()) {
+        unpause_worker.join();
+    }
+
+    REQUIRE(categorized.size() == 3);
+    CHECK(completed_count.load() == 3);
+    REQUIRE(completed_names.size() == 3);
+    CHECK(completed_names[0] == "pause1.txt");
+    CHECK(completed_names[1] == "pause2.txt");
+    CHECK(completed_names[2] == "pause3.txt");
+}
+
+TEST_CASE("CategorizationService cancellation stops future work before subsequent items start") {
+    TempDir base_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", base_dir.path().string());
+    Settings settings;
+    DatabaseManager db(settings.get_config_dir());
+    CategorizationService service(settings, db, nullptr);
+
+    TempDir data_dir;
+    const std::vector<FileEntry> files = {
+        FileEntry{(data_dir.path() / "stop1.txt").string(), "stop1.txt", FileType::File},
+        FileEntry{(data_dir.path() / "stop2.txt").string(), "stop2.txt", FileType::File},
+        FileEntry{(data_dir.path() / "stop3.txt").string(), "stop3.txt", FileType::File}
+    };
+
+    std::atomic<bool> stop_flag{false};
+    std::atomic<int> starts{0};
+
+    class CountStartsLLM : public ILLMClient {
+    public:
+        CountStartsLLM(std::atomic<int>& s) : starts_(s) {}
+
+        std::string categorize_file(const std::string&,
+                                    const std::string&,
+                                    FileType,
+                                    const std::string&) override {
+            ++starts_;
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        std::string complete_prompt(const std::string&, int) override {
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        void set_prompt_logging_enabled(bool) override {}
+
+    private:
+        std::atomic<int>& starts_;
+    };
+
+    auto factory = [&]() { return std::make_unique<CountStartsLLM>(starts); };
+
+    auto completion_callback = [&](const FileEntry&) {
+        // Assert stop immediately after first item completes
+        stop_flag.store(true);
+    };
+
+    const auto categorized = service.categorize_entries(files,
+                                                        true,
+                                                        stop_flag,
+                                                        {},
+                                                        {},
+                                                        completion_callback,
+                                                        {},
+                                                        factory);
+
+    REQUIRE(categorized.size() == 1);
+    CHECK(starts.load() == 1);
+    CHECK(categorized[0].file_name == "stop1.txt");
+}
+
+TEST_CASE("CategorizationService failed or timed-out requests do not deadlock the queue") {
+    TempDir base_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", base_dir.path().string());
+    Settings settings;
+    DatabaseManager db(settings.get_config_dir());
+    CategorizationService service(settings, db, nullptr);
+
+    TempDir data_dir;
+    const std::vector<FileEntry> files = {
+        FileEntry{(data_dir.path() / "fail1.txt").string(), "fail1.txt", FileType::File},
+        FileEntry{(data_dir.path() / "ok2.txt").string(), "ok2.txt", FileType::File}
+    };
+
+    std::atomic<bool> stop_flag{false};
+
+    class FaultyLLM : public ILLMClient {
+    public:
+        std::string categorize_file(const std::string& file_name,
+                                    const std::string&,
+                                    FileType,
+                                    const std::string&) override {
+            if (file_name == "fail1.txt") {
+                throw std::runtime_error("Simulated network timeout");
+            }
+            return "Category: Documents, subcategory: Invoices";
+        }
+
+        std::string complete_prompt(const std::string&, int) override {
+            return "Category: Documents, subcategory: Invoices";
+        }
+
+        void set_prompt_logging_enabled(bool) override {}
+    };
+
+    auto factory = []() { return std::make_unique<FaultyLLM>(); };
+
+    // Service handles failure on item 1 and progresses to item 2 without deadlocking
+    const auto categorized = service.categorize_entries(files,
+                                                        true,
+                                                        stop_flag,
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        {},
+                                                        factory);
+
+    REQUIRE(categorized.size() == 1);
+    CHECK(categorized[0].file_name == "ok2.txt");
+    CHECK(categorized[0].category == "Documents");
+    CHECK(categorized[0].subcategory == "Invoices");
+}
+
+TEST_CASE("CategorizationService late responses after cancellation cannot advance the queue or mutate state") {
+    TempDir base_dir;
+    EnvVarGuard config_guard("AI_FILE_SORTER_CONFIG_DIR", base_dir.path().string());
+    Settings settings;
+    DatabaseManager db(settings.get_config_dir());
+    CategorizationService service(settings, db, nullptr);
+
+    TempDir data_dir;
+    const std::vector<FileEntry> files = {
+        FileEntry{(data_dir.path() / "late1.txt").string(), "late1.txt", FileType::File},
+        FileEntry{(data_dir.path() / "late2.txt").string(), "late2.txt", FileType::File}
+    };
+
+    std::atomic<bool> stop_flag{false};
+    std::atomic<int> result_callbacks_called{0};
+    std::atomic<int> completion_callbacks_called{0};
+
+    class HangingLLM : public ILLMClient {
+    public:
+        HangingLLM(std::atomic<bool>& stop) : stop_(stop) {}
+
+        std::string categorize_file(const std::string&,
+                                    const std::string&,
+                                    FileType,
+                                    const std::string&) override {
+            // Signal stop while request is in flight
+            stop_.store(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        std::string complete_prompt(const std::string&, int) override {
+            return "Category: Documents, subcategory: Reports";
+        }
+
+        void set_prompt_logging_enabled(bool) override {}
+
+    private:
+        std::atomic<bool>& stop_;
+    };
+
+    auto factory = [&]() { return std::make_unique<HangingLLM>(stop_flag); };
+
+    auto result_callback = [&](const CategorizedFile&) {
+        ++result_callbacks_called;
+    };
+    auto completion_callback = [&](const FileEntry&) {
+        ++completion_callbacks_called;
+    };
+
+    const auto categorized = service.categorize_entries(files,
+                                                        true,
+                                                        stop_flag,
+                                                        {},
+                                                        {},
+                                                        completion_callback,
+                                                        {},
+                                                        factory,
+                                                        {},
+                                                        {},
+                                                        result_callback);
+
+    // Initial cancellation aborted before callbacks were invoked
+    CHECK(categorized.empty());
+    CHECK(result_callbacks_called.load() == 0);
+    CHECK(completion_callbacks_called.load() == 0);
+
+    // Wait for the background thread to finish its sleep
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Even after the background thread finished, no late callbacks were dispatched
+    CHECK(result_callbacks_called.load() == 0);
+    CHECK(completion_callbacks_called.load() == 0);
+}

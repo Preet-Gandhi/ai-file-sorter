@@ -222,3 +222,37 @@ TEST_CASE("recursive scans skip unreadable directories and continue") {
     CHECK(entries.front().file_name == "keep.txt");
 }
 #endif
+
+TEST_CASE("FileScannerBehavior defaults skip_reparse_points to true") {
+    FileScannerBehavior behavior;
+    CHECK(behavior.skip_reparse_points == true);
+}
+
+TEST_CASE("recursive scan terminates safely on directory cycle") {
+    TempDir temp_dir;
+    const auto dir_a = temp_dir.path() / "dir_a";
+    std::filesystem::create_directories(dir_a);
+    write_file(dir_a / "file_a.txt");
+
+    std::error_code ec;
+    std::filesystem::create_directory_symlink(temp_dir.path(), dir_a / "loop_link", ec);
+    if (ec) {
+        SKIP("symlink creation is not available in this test environment");
+    }
+
+    FileScanner scanner;
+    FileScannerBehavior behavior;
+    behavior.skip_reparse_points = false; // explicitly disable skip to test cycle detector
+
+    std::vector<FileEntry> entries;
+    REQUIRE_NOTHROW(entries = scanner.get_directory_entries(
+        temp_dir.path().string(),
+        FileScanOptions::Files | FileScanOptions::Recursive,
+        behavior));
+
+    bool found = false;
+    for (const auto& e : entries) {
+        if (e.file_name == "file_a.txt") found = true;
+    }
+    CHECK(found);
+}

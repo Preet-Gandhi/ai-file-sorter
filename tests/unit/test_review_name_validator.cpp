@@ -12,6 +12,8 @@ TEST_CASE("ReviewNameValidator validates filenames")
     CHECK(ReviewNameValidator::validate_filename(
         std::string("rapport_") + "\xC3\xA9" + "nergie.txt",
         error));
+    CHECK(ReviewNameValidator::validate_filename(".gitignore", error));
+    CHECK(ReviewNameValidator::validate_filename(".env", error));
 
     CHECK_FALSE(ReviewNameValidator::validate_filename("", error));
     CHECK(error == "Filename is empty");

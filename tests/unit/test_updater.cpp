@@ -2,10 +2,12 @@
 
 #include "Settings.hpp"
 #include "TestHelpers.hpp"
+#include "UpdateArchiveExtractor.hpp"
 #include "Updater.hpp"
 #include "UpdaterLaunchOptions.hpp"
 #include "UpdaterLiveTestConfig.hpp"
 #include "UpdaterTestAccess.hpp"
+#include "Utils.hpp"
 #include "app_version.hpp"
 
 #include <QAbstractButton>
@@ -17,6 +19,11 @@
 #include <memory>
 
 namespace {
+
+std::string utf8_string(const char8_t* value)
+{
+    return std::string(reinterpret_cast<const char*>(value));
+}
 
 void schedule_message_box_button_click(const QString& target_text, bool* saw_button = nullptr)
 {
@@ -452,3 +459,34 @@ TEST_CASE("Updater required dialog shows changelog items before forcing quit")
         "- Requires the latest model metadata\n"
         "- Improves updater error recovery"));
 }
+
+TEST_CASE("UpdateArchiveExtractor extracts installer from Unicode path") {
+    TempDir temp;
+    const auto unicode_dir = temp.path() / Utils::utf8_to_path(utf8_string(u8"업데이트_폴더_🚀"));
+    std::filesystem::create_directories(unicode_dir);
+    const auto zip_path = unicode_dir / Utils::utf8_to_path(utf8_string(u8"패키지_update.zip"));
+
+    static const unsigned char kValidZipWithInstaller[] = {
+        0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0xc8, 0xb0, 0x26, 0x5d, 0x5d, 0x9b,
+        0xb0, 0x8f, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x73, 0x65,
+        0x74, 0x75, 0x70, 0x2e, 0x65, 0x78, 0x65, 0xf3, 0x8d, 0x02, 0x00, 0x50, 0x4b, 0x01, 0x02, 0x14,
+        0x00, 0x14, 0x00, 0x00, 0x00, 0x08, 0x00, 0xc8, 0xb0, 0x26, 0x5d, 0x5d, 0x9b, 0xb0, 0x8f, 0x04,
+        0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x73, 0x65, 0x74, 0x75, 0x70, 0x2e, 0x65,
+        0x78, 0x65, 0x50, 0x4b, 0x05, 0x06, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x37, 0x00,
+        0x00, 0x00, 0x2b, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+
+    {
+        std::ofstream file(zip_path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(kValidZipWithInstaller), sizeof(kValidZipWithInstaller));
+    }
+
+    const auto dest_dir = temp.path() / "extracted";
+    const auto result = UpdateArchiveExtractor::extract_installer(zip_path, dest_dir);
+
+    CHECK(result.ok());
+    CHECK(!result.installer_path.empty());
+    CHECK(std::filesystem::exists(result.installer_path));
+}
+

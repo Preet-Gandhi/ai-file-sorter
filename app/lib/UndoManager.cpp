@@ -2,6 +2,9 @@
 
 #include "LocalFsProvider.hpp"
 #include "StorageProviderRegistry.hpp"
+#include "Utils.hpp"
+
+#include <filesystem>
 
 #include <QDir>
 #include <QFile>
@@ -142,36 +145,42 @@ UndoManager::UndoResult UndoManager::undo_plan(const QString& plan_path) const
         const QString expected_stable_identity = obj.value("stable_identity").toString();
         const QString expected_revision_token = obj.value("revision_token").toString();
 
-        QFileInfo dest_info(destination);
-        if (!dest_info.exists()) {
+        const auto destination_status = provider->inspect_path(destination.toStdString());
+        if (!destination_status.exists && !provider->path_exists(destination.toStdString())) {
             result.details << QString("Missing destination: %1").arg(destination);
             result.skipped++;
             continue;
         }
 
-        QFileInfo src_info(source);
-        if (src_info.exists()) {
+        std::error_code eq_ec;
+        const bool is_same_file = std::filesystem::equivalent(
+            Utils::utf8_to_path(source.toStdString()),
+            Utils::utf8_to_path(destination.toStdString()),
+            eq_ec);
+        if (!is_same_file && provider->path_exists(source.toStdString())) {
             result.details << QString("Source already exists, skipping: %1").arg(source);
             result.skipped++;
             continue;
         }
 
-        if (expected_size > 0 && dest_info.size() != expected_size) {
-            result.details << QString("Size mismatch for %1").arg(destination);
-            result.skipped++;
-            continue;
-        }
-
-        if (expected_mtime > 0 && !capabilities.should_relax_undo_mtime_validation) {
-            const auto mtime = dest_info.lastModified().toSecsSinceEpoch();
-            if (mtime != expected_mtime) {
-                result.details << QString("Timestamp mismatch for %1").arg(destination);
+        QFileInfo dest_info(destination);
+        if (dest_info.exists()) {
+            if (expected_size > 0 && dest_info.size() != expected_size) {
+                result.details << QString("Size mismatch for %1").arg(destination);
                 result.skipped++;
                 continue;
             }
+
+            if (expected_mtime > 0 && !capabilities.should_relax_undo_mtime_validation) {
+                const auto mtime = dest_info.lastModified().toSecsSinceEpoch();
+                if (mtime != expected_mtime) {
+                    result.details << QString("Timestamp mismatch for %1").arg(destination);
+                    result.skipped++;
+                    continue;
+                }
+            }
         }
 
-        const auto destination_status = provider->inspect_path(destination.toStdString());
         if (!expected_stable_identity.isEmpty() &&
             !destination_status.stable_identity.empty() &&
             destination_status.stable_identity != expected_stable_identity.toStdString()) {

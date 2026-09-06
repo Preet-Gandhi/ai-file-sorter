@@ -206,12 +206,29 @@ std::optional<QString> find_executable(const QString& name) {
 #if defined(AI_FILE_SORTER_USE_LIBZIP)
 std::optional<std::string> extract_zip_member_libzip(const std::filesystem::path& path,
                                                      std::initializer_list<QString> members) {
+#ifdef _WIN32
+    zip_error_t open_error;
+    zip_error_init(&open_error);
+    zip_source_t* src = zip_source_win32w_create(path.wstring().c_str(), 0, -1, &open_error);
+    if (!src) {
+        zip_error_fini(&open_error);
+        return std::nullopt;
+    }
+    zip_t* archive = zip_open_from_source(src, ZIP_RDONLY, &open_error);
+    if (!archive) {
+        zip_source_free(src);
+        zip_error_fini(&open_error);
+        return std::nullopt;
+    }
+    zip_error_fini(&open_error);
+#else
     int error_code = 0;
     const std::string archive_path = Utils::path_to_utf8(path);
     zip_t* archive = zip_open(archive_path.c_str(), ZIP_RDONLY, &error_code);
     if (!archive) {
         return std::nullopt;
     }
+#endif
     for (const auto& member : members) {
         const QByteArray member_name = member.toUtf8();
         zip_file_t* file = zip_fopen(archive, member_name.constData(), 0);
@@ -362,8 +379,16 @@ PdfiumLibraryGuard& pdfium_library() {
 
 std::string extract_pdf_text_pdfium(const std::filesystem::path& path, size_t max_chars) {
     pdfium_library();
-    const std::string pdf_path = Utils::path_to_utf8(path);
-    FPDF_DOCUMENT doc = FPDF_LoadDocument(pdf_path.c_str(), nullptr);
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return {};
+    }
+    std::string file_bytes((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+    if (file_bytes.empty()) {
+        return {};
+    }
+    FPDF_DOCUMENT doc = FPDF_LoadMemDocument64(file_bytes.data(), file_bytes.size(), nullptr);
     if (!doc) {
         return {};
     }

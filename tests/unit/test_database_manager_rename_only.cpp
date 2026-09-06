@@ -4,6 +4,9 @@
 #include "TestHelpers.hpp"
 
 #include <sqlite3.h>
+#include <thread>
+#include <atomic>
+#include <vector>
 
 TEST_CASE("DatabaseManager keeps rename-only entries with empty labels") {
     TempDir base_dir;
@@ -397,4 +400,64 @@ TEST_CASE("DatabaseManager migrates legacy audio and installer-builder taxonomy 
     CHECK(sqlite3_column_int(stmt, 0) == 0);
     sqlite3_finalize(stmt);
     REQUIRE(sqlite3_close(raw_db) == SQLITE_OK);
+}
+
+TEST_CASE("DatabaseManager automatically creates missing config directory", "[database]") {
+    TempDir base_dir;
+    const auto nested_dir = base_dir.path() / "deeply" / "nested" / "config";
+    REQUIRE_FALSE(std::filesystem::exists(nested_dir));
+
+    DatabaseManager db(nested_dir.string());
+    CHECK(std::filesystem::exists(nested_dir));
+
+    DatabaseManager::ResolvedCategory cat{1, "Docs", "Invoices"};
+    bool inserted = db.insert_or_update_file_with_categorization(
+        "test.pdf", "F", "/test", cat, false);
+    CHECK(inserted);
+}
+
+TEST_CASE("DatabaseManager handles concurrent multithreaded operations safely", "[database]") {
+    TempDir base_dir;
+    DatabaseManager db(base_dir.path().string());
+
+    constexpr int kNumThreads = 6;
+    constexpr int kIterations = 50;
+    std::vector<std::thread> threads;
+    std::atomic<bool> all_ok{true};
+
+    for (int t = 0; t < kNumThreads; ++t) {
+        threads.emplace_back([&db, t, &all_ok]() {
+            try {
+                for (int i = 0; i < kIterations; ++i) {
+                    const std::string file_name = "thread_" + std::to_string(t) + "_file_" + std::to_string(i) + ".txt";
+                    const std::string category = "Category_" + std::to_string((t + i) % 5);
+                    const std::string subcategory = "Sub_" + std::to_string((t * i) % 7);
+
+                    auto resolved = db.resolve_category(category, subcategory);
+                    if (resolved.taxonomy_id <= 0) {
+                        all_ok = false;
+                    }
+
+                    bool inserted = db.insert_or_update_file_with_categorization(
+                        file_name, "F", "/concurrent", resolved, false);
+                    if (!inserted) {
+                        all_ok = false;
+                    }
+
+                    auto res = db.get_categorization_from_db("/concurrent", file_name, FileType::File);
+                    if (res.empty()) {
+                        all_ok = false;
+                    }
+                }
+            } catch (...) {
+                all_ok = false;
+            }
+        });
+    }
+
+    for (auto& th : threads) {
+        if (th.joinable()) th.join();
+    }
+
+    CHECK(all_ok.load());
 }
